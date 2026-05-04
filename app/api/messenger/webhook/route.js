@@ -1,190 +1,171 @@
-import Groq from "groq-sdk";
+// filepath: app/api/messenger/route.js
 import { NextResponse } from "next/server";
 
-const client = new Groq({ apiKey: process.env.GROQ_API_KEY });
-const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
-const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
+const VERIFY_TOKEN = process.env.MESSENGER_VERIFY_TOKEN || "mon_chatbot_verify_token";
 
-// ⬇️ Copie ton COMPANY_MANUAL et SYSTEM_PROMPT ici (depuis ton route.js existant)
-const COMPANY_MANUAL = `## 📋 MANUEL D'ENTREPRISE
-
-### 🏢 IDENTITÉ DE L'ENTREPRISE
-- Nom de l'entreprise : [À REMPLIR]
-- Secteur d'activité : [À REMPLIR]
-- Mission : [À REMPLIR]
-- Valeurs : [À REMPLIR]
-
-### 🎯 PRODUITS/SERVICES
-- Produit/service principal 1 : [DESCRIPTION]
-- Produit/service principal 2 : [DESCRIPTION]
-- Produit/service principal 3 : [DESCRIPTION]
-
-### 💰 POLITIQUE COMMERCIALE
-- Gamme de prix : [À REMPLIR]
-- Modes de paiement acceptés : [À REMPLIR]
-- Politique de livraison : [À REMPLIR]
-- Garanties offertes : [À REMPLIR]
-
-### ⏰ HORRAIRES ET CONTACT
-- Horaires d'ouverture : [À REMPLIR]
-- Téléphone : [À REMPLIR]
-- Email : [À REMPLIR]
-- Adresse : [À REMPLIR]
-- Réseaux sociaux : [À REMPLIR]
-
-### 🔧 PROCESSUS DE SUPPORT
-- Procédure de retour : [À REMPLIR]
-- Délai de réponse garanti : [À REMPLIR]
-- Niveau de support (1er/2ème/3ème ligne) : [À REMPLIR]
-
-### ❓ FAQ INTERNE
-- Question fréquente 1 : [RÉPONSE]
-- Question fréquente 2 : [RÉPONSE]
-- Question fréquente 3 : [RÉPONSE]
-`; // ton contenu
-const SYSTEM_PROMPT = `Tu es un assistant virtuel professionnel au service de l'entreprise décrite ci-dessous.
-Tu représentes la marque avec professionnalisme et chaleur.
-
-${COMPANY_MANUAL}
-
-## 🎯 INSTRUCTIONS DE COMPORTEMENT
-
-1. **Langue** : Réponds toujours dans la langue utilisée par le client (français, anglais, etc.)
-
-2. **Ton** : Professionnel, chaleureux, empathique et disponible
-
-3. **Limites** : 
-   - Ne invente pas d'informations non présentes dans ce manuel
-   - Dirige vers un conseiller humain si la demande dépasse tes compétences
-   - Sois transparent sur tes capacités
-
-4. **Objectifs** :
-   - Comprendre le besoin du client
-   - Proposer des solutions adaptées
-   - Fidéliser le client
-   - Générer des conversions
-
-5. **Format** :
-   - Réponses concises mais complètes
-   - Utilise des listes à puces pour les informations multiples
-   - Propose des actions concrètes quand pertinent
-
-6. **Avant chaque conversation** : Relis ce manuel pour fournir des réponses précises et cohérentes.
-
-## 🔄 SYSTÈME D'AUTO-APPRENTISSAGE
-
-Chaque interaction est une opportunité d'apprentissage. Voici comment tu dois fonctionner :
-
-### Mémoire contextuelle (par session)
-- Mémorise les informations importantes données par le client pendant la conversation
-- Sois capable de faire référence à des détails partagés précédemment
-- Synthétise les besoins exprimés pour proposer des solutions pertinentes
-
-### Amélioration continue
-- Analyse les questions fréquentes pour identifier les gaps d'information
-- Si une question te pose problème, note-la pour suggester des améliorations du manuel
-- Propose des solutions alternatives quand la première ne convient pas
-
-### Gestion des erreurs
-- Si tu ne sais pas quelque chose, admets-le honnêtement
-- Propose de transmettre la demande à un conseiller humain
-- Tu peux demander des clarifications pour mieux aider
-
-### Métriques à suivre (pour suggestion d'amélioration)
-- Taux de résolution au premier contact
-- Temps de réponse moyen
-- Satisfaction client (demande feedback en fin de conversation)
-- Topics récurrents nécessitant des mises à jour du manuel`;
-
-export async function POST(request) {
-  try {
-    const { messages } = await request.json();
-
-    const response = await client.chat.completions.create({
-      model: "llama-3.3-70b-versatile", // Modèle gratuit de Groq
-      max_tokens: 1024,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        ...messages
-      ],
-    });
-
-    return NextResponse.json({ reply: response.choices[0].message.content });
-
-  } catch (error) {
-    console.error("Erreur :", error);
-    return NextResponse.json(
-      { error: "Une erreur est survenue." },
-      { status: 500 }
-    );
-  }
-}; // ton contenu
-
-// Vérification Facebook
-export async function GET(req) {
-  const { searchParams } = new URL(req.url);
+// ==================================================
+// GET : Vérification du webhook par Meta
+// ==================================================
+export async function GET(request) {
+  const { searchParams } = new URL(request.url);
   const mode = searchParams.get("hub.mode");
   const token = searchParams.get("hub.verify_token");
   const challenge = searchParams.get("hub.challenge");
 
+  // Vérification du webhook (Meta appelle cette URL pour valider)
   if (mode === "subscribe" && token === VERIFY_TOKEN) {
-    return new Response(challenge, { status: 200 });
+    console.log("✅ Webhook Messenger vérifié !");
+    return new NextResponse(challenge, { status: 200 });
   }
-  return new Response("Forbidden", { status: 403 });
+
+  console.log("❌ Échec de vérification du webhook");
+  return new NextResponse("Token de vérification invalide", { status: 403 });
 }
 
-// Réception des messages Messenger
-`Tu es un assistant virtuel professionnel au service de l'entreprise décrite ci-dessous.
-Tu représentes la marque avec professionnalisme et chaleur.
+// ==================================================
+// POST : Réception des messages depuis Messenger
+// ==================================================
+export async function POST(request) {
+  try {
+    const body = await request.json();
 
-${COMPANY_MANUAL}
+    // Vérifier que c'est un message de page
+    if (body.object !== "page") {
+      return new NextResponse("OK", { status: 200 });
+    }
 
-## 🎯 INSTRUCTIONS DE COMPORTEMENT
+    // Traiter chaque entrée
+    for (const entry of body.entry || []) {
+      for (const messaging of entry.messaging || []) {
+        const senderId = messaging.sender?.id;
+        const messageText = messaging.message?.text;
+        const postback = messaging.postback?.payload;
 
-1. **Langue** : Réponds toujours dans la langue utilisée par le client (français, anglais, etc.)
+        if (senderId) {
+          // Gérer les postbacks (boutons cliqués)
+          if (postback) {
+            await handlePostback(senderId, postback);
+          }
+          // Gérer les messages texte
+          else if (messageText) {
+            await handleMessage(senderId, messageText);
+          }
+        }
+      }
+    }
 
-2. **Ton** : Professionnel, chaleureux, empathique et disponible
+    return new NextResponse("OK", { status: 200 });
+  } catch (error) {
+    console.error("❌ Erreur webhook Messenger:", error);
+    return new NextResponse("OK", { status: 200 });
+  }
+}
 
-3. **Limites** : 
-   - Ne invente pas d'informations non présentes dans ce manuel
-   - Dirige vers un conseiller humain si la demande dépasse tes compétences
-   - Sois transparent sur tes capacités
+// ==================================================
+// Gérer les messages texte
+// ==================================================
+async function handleMessage(senderId, messageText) {
+  try {
+    // Appeler notre chatbot existant (/api/chat)
+    const res = await fetch(new URL(request.url).origin + "/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ 
+        messages: [{ role: "user", content: messageText }] 
+      }),
+    });
 
-4. **Objectifs** :
-   - Comprendre le besoin du client
-   - Proposer des solutions adaptées
-   - Fidéliser le client
-   - Générer des conversions
+    const data = await res.json();
+    const reply = data.reply || "Désolé, j'ai eu un problème. Veuillez réessayer.";
 
-5. **Format** :
-   - Réponses concises mais complètes
-   - Utilise des listes à puces pour les informations multiples
-   - Propose des actions concrètes quand pertinent
+    // Envoyer la réponse via l'API Messenger
+    await sendMessage(senderId, reply);
 
-6. **Avant chaque conversation** : Relis ce manuel pour fournir des réponses précises et cohérentes.
+  } catch (error) {
+    console.error("Erreur handleMessage:", error);
+    await sendMessage(senderId, "Une erreur est survenue. Veuillez réessayer.");
+  }
+}
 
-## 🔄 SYSTÈME D'AUTO-APPRENTISSAGE
+// ==================================================
+// Gérer les postbacks (boutons cliqués)
+// ==================================================
+async function handlePostback(senderId, payload) {
+  const responses = {
+    "START_CONVERSATION": "Bonjour ! 👋 Bienvenue ! Comment puis-je vous aider ?",
+    "GET_INFO": "Je peux vous informer sur nos produits, services, tarifs. Que souhaitez-vous savoir ?",
+    "CONTACT_SUPPORT": "Je vais vous mettre en contact avec un conseiller. Veuillez patienter...",
+    "ONBOARDING": "Je vais vous orienter vers notre formulaire de contact. Un conseiller vous répondra sous 24h.",
+  };
 
-Chaque interaction est une opportunité d'apprentissage. Voici comment tu dois fonctionner :
+  const reply = responses[payload] || "Comment puis-je vous aider ?";
+  await sendMessage(senderId, reply);
+}
 
-### Mémoire contextuelle (par session)
-- Mémorise les informations importantes données par le client pendant la conversation
-- Sois capable de faire référence à des détails partagés précédemment
-- Synthétise les besoins exprimés pour proposer des solutions pertinentes
+// ==================================================
+// Envoyer un message via l'API Messenger Graph
+// ==================================================
+async function sendMessage(recipientId, text) {
+  const PAGE_ACCESS_TOKEN = process.env.MESSENGER_PAGE_ACCESS_TOKEN;
+  
+  if (!PAGE_ACCESS_TOKEN) {
+    console.error("❌ MESSENGER_PAGE_ACCESS_TOKEN non configuré");
+    return;
+  }
 
-### Amélioration continue
-- Analyse les questions fréquentes pour identifier les gaps d'information
-- Si une question te pose problème, note-la pour suggester des améliorations du manuel
-- Propose des solutions alternatives quand la première ne convient pas
+  try {
+    const response = await fetch(
+      `https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recipient: { id: recipientId },
+          message: { text },
+        }),
+      }
+    );
 
-### Gestion des erreurs
-- Si tu ne sais pas quelque chose, admets-le honnêtement
-- Propose de transmettre la demande à un conseiller humain
-- Tu peux demander des clarifications pour mieux aider
+    const result = await response.json();
+    
+    if (!response.ok) {
+      console.error("❌ Erreur envoi message:", result);
+    } else {
+      console.log("✅ Message envoyé à", recipientId);
+    }
+    
+    return result;
+  } catch (error) {
+    console.error("❌ Erreur sendMessage:", error);
+  }
+}
 
-### Métriques à suivre (pour suggestion d'amélioration)
-- Taux de résolution au premier contact
-- Temps de réponse moyen
-- Satisfaction client (demande feedback en fin de conversation)
-- Topics récurrents nécessitant des mises à jour du manuel`;
+// ==================================================
+// Helper: Envoyer un message avec boutons (Quick Reply)
+// ==================================================
+async function sendQuickReply(recipientId, text, buttons) {
+  const PAGE_ACCESS_TOKEN = process.env.MESSENGER_PAGE_ACCESS_TOKEN;
+  
+  if (!PAGE_ACCESS_TOKEN) return;
 
+  const quickReplies = buttons.map(btn => ({
+    content_type: "text",
+    title: btn.title,
+    payload: btn.payload,
+  }));
+
+  await fetch(
+    `https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        recipient: { id: recipientId },
+        message: {
+          text,
+          quick_replies: quickReplies,
+        },
+      }),
+    }
+  );
+}
