@@ -64,7 +64,7 @@ export async function POST(request) {
 // ==================================================
 // Gérer les messages texte
 // ==================================================
-async function handleMessage(senderId, messageText) {
+async function handleMessage(senderId, messageText, origin) {
   try {
     // Appeler notre chatbot existant (/api/chat)
     const res = await fetch(new URL(request.url).origin + "/api/chat", {
